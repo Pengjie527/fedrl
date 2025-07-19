@@ -1,3 +1,4 @@
+import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
@@ -13,11 +14,10 @@ def train_dqn(
     policy_net,
     target_net,
     optimizer,
+    device, # Moved non-default argument before default arguments
     iterations=10000, 
     batch_size=256,
-    target_update_freq=500, # This will be ignored, but kept for API compatibility
-    tau=0.005, # Soft update parameter
-    device
+    tau=0.005
 ):
     """
     Trains a DQN model using the provided data.
