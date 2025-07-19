@@ -1,0 +1,7 @@
+{
+    "mode": "centralized",
+    "n_clients": 3,
+    "rounds": 20,
+    "test_size": 0.2,
+    "seed": 42
+}
