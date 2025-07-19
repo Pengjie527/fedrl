@@ -3,7 +3,7 @@ import torch.optim as optim
 from collections import OrderedDict
 
 # 导入我们自己的模块
-from dqn_network import DQN, device
+from dqn_network import DQN # No longer import device
 from dqn_trainer import train_dqn
 
 # ============================================================
@@ -14,7 +14,7 @@ class Client:
     代表一个客户端，例如一家医院。
     它拥有本地的病人数据，并负责使用DQN进行本地训练。
     """
-    def __init__(self, client_id, local_data, n_states, n_actions):
+    def __init__(self, client_id, local_data, n_states, n_actions, device):
         self.client_id = client_id
         self.data = local_data
         
@@ -43,6 +43,8 @@ class Client:
 
         print(f"  [Client {self.client_id}] Starting local DQN training...")
         
+        # 导入我们自己的模块
+        from dqn_trainer import train_dqn
         avg_loss = train_dqn(
             data=self.data.copy(),
             n_states=n_states,
@@ -68,7 +70,7 @@ class Server:
     代表中央服务器。
     负责协调整个联邦学习过程，包括分发和聚合DQN模型权重。
     """
-    def __init__(self, clients, n_states, n_actions, discount=0.99):
+    def __init__(self, clients, n_states, n_actions, discount, device):
         self.clients = clients
         self.n_states = n_states
         self.n_actions = n_actions

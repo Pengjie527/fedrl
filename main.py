@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 # 导入我们自己的模块
 from utils import build_state_features, discretize_actions, federated_kmeans
 from evaluation import ExperimentLogger
-from dqn_network import DQN, device
+from dqn_network import DQN
 from dqn_trainer import train_dqn
 from federated_learning import Client, Server
 
@@ -36,9 +36,11 @@ COL_NORM = ['age', 'Weight_kg', 'GCS', 'HR', 'SysBP', 'MeanBP', 'DiaBP', 'RR', '
 COL_LOG = ['SpO2', 'BUN', 'Creatinine', 'SGOT', 'SGPT', 'Total_bili', 'INR', 'input_total',
            'input_4hourly', 'output_total', 'output_4hourly']
 
-def set_global_seed(seed: int):
+def set_global_seed(seed: int, device_str: str):
     random.seed(seed)
     np.random.seed(seed)
+    if device_str == 'cuda' and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available, but was requested. Please set --device cpu.")
 
 def generate_and_load_data():
     """
@@ -112,7 +114,7 @@ def preprocess_data(df, seed=42):
     
     return df
 
-def evaluate_policy_dqn(policy_net, test_data, discount):
+def evaluate_policy_dqn(policy_net, test_data, discount, device):
     """
     Evaluates a DQN policy on the test set.
     """
@@ -152,7 +154,7 @@ def evaluate_policy_dqn(policy_net, test_data, discount):
         
     return total_discounted_reward / num_episodes
 
-def run_federated(args, train_data, test_data):
+def run_federated(args, train_data, test_data, device):
     """
     Run the federated learning experiment with DQN.
     """
@@ -166,17 +168,17 @@ def run_federated(args, train_data, test_data):
     
     for i in range(args.n_clients):
         client_df = train_data.loc[client_data_indices[i]].copy()
-        client = Client(client_id=i, local_data=client_df, n_states=N_STATES, n_actions=N_ACTIONS)
+        client = Client(client_id=i, local_data=client_df, n_states=N_STATES, n_actions=N_ACTIONS, device=device)
         clients.append(client)
 
-    server = Server(clients, n_states=N_STATES, n_actions=N_ACTIONS, discount=DISCOUNT_FACTOR)
+    server = Server(clients, n_states=N_STATES, n_actions=N_ACTIONS, discount=DISCOUNT_FACTOR, device=device)
 
     for round_num in range(1, args.rounds + 1):
         print(f"\n=============== Federated Round {round_num}/{args.rounds} ===============")
         server.train_one_round()
         
         global_net = server.get_global_net()
-        global_reward = evaluate_policy_dqn(global_net, test_data, DISCOUNT_FACTOR)
+        global_reward = evaluate_policy_dqn(global_net, test_data, DISCOUNT_FACTOR, device)
         
         client_losses = server.get_client_losses()
         avg_loss = np.mean(list(client_losses.values()))
@@ -185,14 +187,14 @@ def run_federated(args, train_data, test_data):
         client_rewards = {}
         for client in clients:
             client_net = client.get_policy_net()
-            client_rewards[client.client_id] = evaluate_policy_dqn(client_net, test_data, DISCOUNT_FACTOR)
+            client_rewards[client.client_id] = evaluate_policy_dqn(client_net, test_data, DISCOUNT_FACTOR, device)
 
         logger.log_round_data(round_num, global_reward, client_rewards, loss=avg_loss)
 
     logger.save_results()
     print("================== Federated DQN Experiment Finished ==================")
 
-def run_centralized(args, train_data, test_data):
+def run_centralized(args, train_data, test_data, device):
     """Run the centralized DQN experiment."""
     print("\n================== Starting Centralized DQN Experiment ==================")
     logger = ExperimentLogger(log_dir=os.path.join('logs', 'centralized'))
@@ -215,17 +217,18 @@ def run_centralized(args, train_data, test_data):
             policy_net=policy_net,
             target_net=target_net,
             optimizer=optimizer,
-            iterations=10000 # More iterations for centralized
+            iterations=10000, # More iterations for centralized
+            device=device
         )
 
-        global_reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR)
+        global_reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR, device)
         logger.log_round_data(round_num, global_reward, {}, loss=avg_loss)
 
     logger.save_results()
     print("================== Centralized DQN Experiment Finished ==================")
 
 
-def run_local_only(args, train_data, test_data):
+def run_local_only(args, train_data, test_data, device):
     """
     Runs the local-only DQN experiment.
     """
@@ -256,10 +259,11 @@ def run_local_only(args, train_data, test_data):
             data=client_df,
             n_states=N_STATES, n_actions=N_ACTIONS, discount=DISCOUNT_FACTOR,
             policy_net=policy_net, target_net=target_net, optimizer=optimizer,
-            iterations=total_iterations
+            iterations=total_iterations,
+            device=device
         )
         
-        reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR)
+        reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR, device)
         all_client_rewards.append(reward)
         all_client_losses.append(avg_loss)
         print(f"--- Client {i} finished. Reward: {reward:.4f}, Avg Loss: {avg_loss:.4f} ---")
@@ -280,18 +284,21 @@ def main():
     """
     主函数，驱动整个联邦强化学习模拟流程。
     """
-    parser = argparse.ArgumentParser(description="运行联邦/集中式/本地强化学习实验")
+    parser = argparse.ArgumentParser(description="Run Federated/Centralized DQN Experiments")
     parser.add_argument('--mode', type=str, default='federated', choices=['federated', 'centralized', 'local_only'],
                         help='选择实验模式')
     parser.add_argument('--n_clients', type=int, default=3, help='客户端数量 (仅用于 federated 和 local_only 模式)')
     parser.add_argument('--rounds', type=int, default=10, help='联邦学习或模拟的轮次')
     parser.add_argument('--test_size', type=float, default=0.2, help='用于全局测试集的数据比例')
     parser.add_argument('--seed', type=int, default=42, help='随机种子，保证可复现')
+    parser.add_argument('--device', type=str, default='cuda', choices=['cuda', 'cpu'],
+                        help='Device to run the experiment on.')
     
     args = parser.parse_args()
     
-    # 0. 设定统一随机种子
-    set_global_seed(args.seed)
+    device = torch.device(args.device)
+    
+    set_global_seed(args.seed, args.device)
 
     # 1. 加载和预处理数据
     raw_data = generate_and_load_data()
@@ -309,11 +316,11 @@ def main():
 
     # 3. 根据模式运行实验
     if args.mode == 'federated':
-        run_federated(args, train_data, test_data)
+        run_federated(args, train_data, test_data, device)
     elif args.mode == 'centralized':
-        run_centralized(args, train_data, test_data)
+        run_centralized(args, train_data, test_data, device)
     elif args.mode == 'local_only':
-        run_local_only(args, train_data, test_data)
+        run_local_only(args, train_data, test_data, device)
 if __name__ == '__main__':
     main()
 

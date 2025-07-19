@@ -1,4 +1,3 @@
-import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
@@ -17,7 +16,8 @@ def train_dqn(
     iterations=10000, 
     batch_size=256,
     target_update_freq=500, # This will be ignored, but kept for API compatibility
-    tau=0.005 # Soft update parameter
+    tau=0.005, # Soft update parameter
+    device
 ):
     """
     Trains a DQN model using the provided data.
@@ -62,11 +62,11 @@ def train_dqn(
         batch_next_states = next_states[indices]
 
         # Compute Q(s, a) - the model's prediction
-        q_values = policy_net(batch_states).gather(1, batch_actions.unsqueeze(1))
+        q_values = policy_net(batch_states, device).gather(1, batch_actions.unsqueeze(1))
 
         # Compute V(s_{t+1}) for all next states.
         with torch.no_grad():
-            next_q_values = target_net(batch_next_states).max(1)[0]
+            next_q_values = target_net(batch_next_states, device).max(1)[0]
             # Compute the expected Q values
             expected_q_values = batch_rewards + (discount * next_q_values)
 
