@@ -114,7 +114,7 @@ def preprocess_data(df, seed=42):
     
     return df
 
-def evaluate_policy_dqn(policy_net, test_data, discount, device):
+def evaluate_policy_dqn(policy_net, test_data, discount, device, state_avg_rewards):
     """
     Evaluates a DQN policy on the test set.
     """
@@ -144,8 +144,11 @@ def evaluate_policy_dqn(policy_net, test_data, discount, device):
             state = int(row['state'])
             chosen_a = policy[state]
             
-            # Use logged reward if action matches, otherwise a small penalty
-            reward = row['reward'] if chosen_a == int(row['action']) else -1
+            if chosen_a == int(row['action']):
+                reward = row['reward']
+            else:
+                # If the action doesn't match, use the pre-calculated average reward for that state
+                reward = state_avg_rewards.get(state, 0)
             
             episode_reward += current_discount * reward
             current_discount *= discount
@@ -154,7 +157,7 @@ def evaluate_policy_dqn(policy_net, test_data, discount, device):
         
     return total_discounted_reward / num_episodes
 
-def run_federated(args, train_data, test_data, device):
+def run_federated(args, train_data, test_data, device, state_avg_rewards):
     """
     Run the federated learning experiment with DQN.
     """
@@ -178,7 +181,7 @@ def run_federated(args, train_data, test_data, device):
         server.train_one_round()
         
         global_net = server.get_global_net()
-        global_reward = evaluate_policy_dqn(global_net, test_data, DISCOUNT_FACTOR, device)
+        global_reward = evaluate_policy_dqn(global_net, test_data, DISCOUNT_FACTOR, device, state_avg_rewards)
         
         client_losses = server.get_client_losses()
         avg_loss = np.mean(list(client_losses.values()))
@@ -187,14 +190,14 @@ def run_federated(args, train_data, test_data, device):
         client_rewards = {}
         for client in clients:
             client_net = client.get_policy_net()
-            client_rewards[client.client_id] = evaluate_policy_dqn(client_net, test_data, DISCOUNT_FACTOR, device)
+            client_rewards[client.client_id] = evaluate_policy_dqn(client_net, test_data, DISCOUNT_FACTOR, device, state_avg_rewards)
 
         logger.log_round_data(round_num, global_reward, client_rewards, loss=avg_loss)
 
     logger.save_results()
     print("================== Federated DQN Experiment Finished ==================")
 
-def run_centralized(args, train_data, test_data, device):
+def run_centralized(args, train_data, test_data, device, state_avg_rewards):
     """Run the centralized DQN experiment."""
     print("\n================== Starting Centralized DQN Experiment ==================")
     logger = ExperimentLogger(log_dir=os.path.join('logs', 'centralized'))
@@ -221,14 +224,14 @@ def run_centralized(args, train_data, test_data, device):
             device=device
         )
 
-        global_reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR, device)
+        global_reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR, device, state_avg_rewards)
         logger.log_round_data(round_num, global_reward, {}, loss=avg_loss)
 
     logger.save_results()
     print("================== Centralized DQN Experiment Finished ==================")
 
 
-def run_local_only(args, train_data, test_data, device):
+def run_local_only(args, train_data, test_data, device, state_avg_rewards):
     """
     Runs the local-only DQN experiment.
     """
@@ -263,7 +266,7 @@ def run_local_only(args, train_data, test_data, device):
             device=device
         )
         
-        reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR, device)
+        reward = evaluate_policy_dqn(policy_net, test_data, DISCOUNT_FACTOR, device, state_avg_rewards)
         all_client_rewards.append(reward)
         all_client_losses.append(avg_loss)
         print(f"--- Client {i} finished. Reward: {reward:.4f}, Avg Loss: {avg_loss:.4f} ---")
@@ -305,22 +308,25 @@ def main():
     processed_data = preprocess_data(raw_data, args.seed)
 
     # 2. 划分训练集和测试集
-    #    为保证可复现性和公平性，我们基于 'icustayid' 进行划分
     all_patient_ids = processed_data['icustayid'].unique()
     train_ids, test_ids = train_test_split(all_patient_ids, test_size=args.test_size, random_state=42)
     
     train_data = processed_data[processed_data['icustayid'].isin(train_ids)].copy()
     test_data = processed_data[processed_data['icustayid'].isin(test_ids)].copy()
     
-    print(f"\n数据划分完毕: {len(train_data)} 条训练数据, {len(test_data)} 条测试数据。")
+    print(f"\nData split complete: {len(train_data)} training samples, {len(test_data)} test samples.")
+
+    # 预计算每个状态下的平均奖励，用于评估
+    print("Pre-calculating average rewards per state for evaluation...")
+    state_avg_rewards = train_data.groupby('state')['reward'].mean().to_dict()
 
     # 3. 根据模式运行实验
     if args.mode == 'federated':
-        run_federated(args, train_data, test_data, device)
+        run_federated(args, train_data, test_data, device, state_avg_rewards)
     elif args.mode == 'centralized':
-        run_centralized(args, train_data, test_data, device)
+        run_centralized(args, train_data, test_data, device, state_avg_rewards)
     elif args.mode == 'local_only':
-        run_local_only(args, train_data, test_data, device)
+        run_local_only(args, train_data, test_data, device, state_avg_rewards)
 if __name__ == '__main__':
     main()
 
