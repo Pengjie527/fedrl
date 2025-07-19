@@ -126,7 +126,7 @@ def evaluate_policy_dqn(policy_net, test_data, discount, device, state_avg_rewar
     # Generate the policy (action for each state) from the DQN
     with torch.no_grad():
         all_states = torch.arange(N_STATES, device=device)
-        q_values = policy_net(all_states)
+        q_values = policy_net(all_states, device)
         policy = torch.argmax(q_values, axis=1).cpu().numpy()
 
     total_discounted_reward = 0
@@ -208,7 +208,7 @@ def run_centralized(args, train_data, test_data, device, state_avg_rewards):
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
     optimizer = torch.optim.Adam(policy_net.parameters(), lr=1e-4)
-    
+
     for round_num in range(1, args.rounds + 1):
         print(f"\n--- Centralized Round {round_num}/{args.rounds}: Training DQN ---")
         
@@ -243,7 +243,7 @@ def run_local_only(args, train_data, test_data, device, state_avg_rewards):
     
     all_client_rewards = []
     all_client_losses = []
-
+    
     for i in range(args.n_clients):
         print(f"\n--- Training Client {i} ---")
         client_df = train_data.loc[client_data_indices[i]].copy()
